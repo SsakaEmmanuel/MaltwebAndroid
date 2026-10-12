@@ -23,9 +23,8 @@ import java.net.URL
 import java.util.concurrent.Executors
 
 /**
- * MALTWEB Android user app with a mandatory GitHub Releases update gate.
- * A release tag such as v1.1.0 must match app versionName 1.1.0.
- * Update checks use GitHub's public latest-release API.
+ * MALTWEB user APK with a mandatory GitHub Releases update gate.
+ * Release tags must be semantic versions such as v1.1.0.
  */
 class MainActivity : ComponentActivity() {
     private val websiteUrl = "https://ssakaemmanuel.github.io/maltweb/"
@@ -40,10 +39,11 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         showCheckingScreen()
         checkForRequiredUpdate()
+
         onBackPressedDispatcher.addCallback(this, object : OnBackPressedCallback(true) {
             override fun handleOnBackPressed() {
-                val wv = webView
-                if (wv != null && wv.canGoBack()) wv.goBack()
+                val browser = webView
+                if (browser != null && browser.canGoBack()) browser.goBack()
                 else {
                     isEnabled = false
                     onBackPressedDispatcher.onBackPressed()
@@ -82,14 +82,14 @@ class MainActivity : ComponentActivity() {
         isChecking = true
         io.execute {
             try {
-                val connection = (URL(latestReleaseApi).openConnection() as HttpURLConnection).apply {
-                    requestMethod = "GET"
-                    connectTimeout = 10000
-                    readTimeout = 10000
-                    setRequestProperty("Accept", "application/vnd.github+json")
-                    setRequestProperty("X-GitHub-Api-Version", "2022-11-28")
-                    setRequestProperty("User-Agent", "MALTWEB-Android")
-                }
+                val connection = URL(latestReleaseApi).openConnection() as HttpURLConnection
+                connection.requestMethod = "GET"
+                connection.connectTimeout = 10000
+                connection.readTimeout = 10000
+                connection.setRequestProperty("Accept", "application/vnd.github+json")
+                connection.setRequestProperty("X-GitHub-Api-Version", "2022-11-28")
+                connection.setRequestProperty("User-Agent", "MALTWEB-Android")
+
                 val response = try {
                     if (connection.responseCode !in 200..299) {
                         throw IllegalStateException("GitHub returned HTTP ${connection.responseCode}")
@@ -98,37 +98,41 @@ class MainActivity : ComponentActivity() {
                 } finally {
                     connection.disconnect()
                 }
+
                 val release = JSONObject(response)
                 val tag = release.optString("tag_name", "").trim()
                 val releaseUrl = release.optString("html_url", "").trim()
                 val notes = release.optString("body", "").trim()
                 val assets = release.optJSONArray("assets")
-                var apkUrl = ""
+                var hasApk = false
+
                 if (assets != null) {
                     for (i in 0 until assets.length()) {
                         val asset = assets.optJSONObject(i) ?: continue
-                        val name = asset.optString("name", "")
-                        if (name.endsWith(".apk", ignoreCase = true)) {
-                            apkUrl = asset.optString("browser_download_url", "")
-                            if (name.equals("MALTWEB.apk", ignoreCase = true)) break
+                        if (asset.optString("name", "").endsWith(".apk", ignoreCase = true)) {
+                            hasApk = true
+                            break
                         }
                     }
                 }
-                if (tag.isBlank() || releaseUrl.isBlank() || apkUrl.isBlank()) {
-                    throw IllegalStateException("The latest GitHub Release does not contain an APK asset.")
+
+                if (tag.isBlank() || releaseUrl.isBlank() || !hasApk) {
+                    throw IllegalStateException("The latest GitHub Release has no APK asset.")
                 }
-                val current = BuildConfig.VERSION_NAME
-                val newer = compareVersions(tag.removePrefix("v"), current) > 0
+
+                val currentVersion = BuildConfig.VERSION_NAME
+                val isNewer = compareVersions(tag.removePrefix("v"), currentVersion) > 0
+
                 runOnUiThread {
                     isChecking = false
                     if (isFinishing) return@runOnUiThread
-                    if (newer) showMandatoryUpdate(tag, releaseUrl, apkUrl, notes)
+                    if (isNewer) showMandatoryUpdate(tag, releaseUrl, notes)
                     else openWebsite()
                 }
-            } catch (e: Exception) {
+            } catch (error: Exception) {
                 runOnUiThread {
                     isChecking = false
-                    if (!isFinishing) showCheckFailed(e.message ?: "Network or GitHub error")
+                    if (!isFinishing) showCheckFailed(error.message ?: "Network or GitHub error")
                 }
             }
         }
@@ -145,20 +149,18 @@ class MainActivity : ComponentActivity() {
         return 0
     }
 
-    private fun showMandatoryUpdate(tag: String, releaseUrl: String, apkUrl: String, notes: String) {
+    private fun showMandatoryUpdate(tag: String, releaseUrl: String, notes: String) {
         val message = buildString {
             append("A newer version ($tag) is required before you can use MALTWEB.")
             if (notes.isNotBlank()) append("\n\nWhat's new:\n").append(notes.take(1800))
-            append("\n\nChoose Update Now to open the official GitHub Release and download the APK.")
+            append("\n\nTap Update Now to open the official GitHub Release page.")
         }
+
         updateDialog = AlertDialog.Builder(this)
             .setTitle("MALTWEB update required")
             .setMessage(message)
             .setCancelable(false)
-            .setPositiveButton("Update Now") { _, _ ->
-                // Open the release page; users can inspect and download the APK themselves.
-                openExternal(releaseUrl.ifBlank { apkUrl })
-            }
+            .setPositiveButton("Update Now") { _, _ -> openExternal(releaseUrl) }
             .setNegativeButton("I've updated — Check again") { _, _ ->
                 updateDialog = null
                 checkForRequiredUpdate()
@@ -173,7 +175,7 @@ class MainActivity : ComponentActivity() {
         updateDialog = AlertDialog.Builder(this)
             .setTitle("Can't verify MALTWEB version")
             .setMessage(
-                "MALTWEB must check GitHub before opening. Check your internet connection and try again.\n\nDetails: $reason"
+                "MALTWEB must check GitHub before opening. Check your internet and retry.\n\nDetails: $reason"
             )
             .setCancelable(false)
             .setPositiveButton("Retry") { _, _ ->
@@ -221,7 +223,10 @@ class MainActivity : ComponentActivity() {
             settings.allowContentAccess = false
             settings.mixedContentMode = android.webkit.WebSettings.MIXED_CONTENT_NEVER_ALLOW
             webViewClient = object : WebViewClient() {
-                override fun shouldOverrideUrlLoading(view: WebView?, request: WebResourceRequest?): Boolean {
+                override fun shouldOverrideUrlLoading(
+                    view: WebView?,
+                    request: WebResourceRequest?
+                ): Boolean {
                     val uri = request?.url ?: return false
                     return uri.scheme != "https" && uri.scheme != "http"
                 }
@@ -242,8 +247,7 @@ class MainActivity : ComponentActivity() {
             LinearLayout.LayoutParams.MATCH_PARENT, 0, 1f
         ))
         setContentView(layout)
-        if (savedInstanceState != null) browser.restoreState(savedInstanceState)
-        else browser.loadUrl(websiteUrl)
+        browser.loadUrl(websiteUrl)
     }
 
     private fun dp(value: Int): Int = (value * resources.displayMetrics.density).toInt()
