@@ -2,50 +2,56 @@ package com.maltweb.android
 
 import android.annotation.SuppressLint
 import android.graphics.Bitmap
+import android.graphics.Color
+import android.graphics.Typeface
 import android.os.Bundle
+import android.view.Gravity
+import android.view.View
 import android.view.ViewGroup
+import android.view.animation.AlphaAnimation
+import android.view.animation.Animation
+import android.view.animation.ScaleAnimation
 import android.webkit.WebChromeClient
+import android.webkit.WebResourceError
 import android.webkit.WebResourceRequest
 import android.webkit.WebView
 import android.webkit.WebViewClient
+import android.widget.Button
 import android.widget.FrameLayout
+import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.ProgressBar
 import android.widget.TextView
-import android.graphics.Color
-import android.graphics.Typeface
-import android.view.Gravity
-import android.view.View
-import android.widget.Button
 import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.OnBackPressedCallback
-import androidx.core.view.setPadding
 
 /**
- * MALTWEB user app: a native Android shell around the existing MALTWEB website.
+ * MALTWEB user APK.
+ * Loads the existing website inside the app, adds native branded navigation,
+ * and shows an animated MALTWEB loading overlay while pages load.
  *
- * The website remains the source of truth for listings, categories, registration,
- * login, and user-facing pages. Administrator access must be restricted by the
- * website/backend permissions; hiding an admin button in an APK is not security.
+ * Authentication must be enforced by the website and Supabase RLS policies.
+ * Do not rely on hiding navigation links in this APK as an access-control system.
  */
 class MainActivity : ComponentActivity() {
 
     private val websiteUrl = "https://ssakaemmanuel.github.io/maltweb/"
+    private val maltGreen = Color.rgb(18, 107, 80)
+    private val deepGreen = Color.rgb(5, 67, 53)
+    private val white = Color.WHITE
+    private val darkText = Color.rgb(23, 41, 35)
+    private val muted = Color.rgb(102, 119, 111)
 
     private lateinit var webView: WebView
     private lateinit var progressBar: ProgressBar
     private lateinit var titleView: TextView
+    private lateinit var loadingOverlay: LinearLayout
+    private lateinit var loadingLogo: ImageView
     private lateinit var backButton: Button
     private lateinit var forwardButton: Button
-    private lateinit var homeButton: Button
-    private lateinit var refreshButton: Button
-    private lateinit var pageContainer: FrameLayout
 
-    private val maltGreen = Color.rgb(18, 107, 80)
-    private val pageWhite = Color.WHITE
-    private val softBackground = Color.rgb(247, 249, 247)
-    private val darkText = Color.rgb(23, 41, 35)
+    private var pageLoadCount = 0
 
     @SuppressLint("SetJavaScriptEnabled")
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -53,132 +59,175 @@ class MainActivity : ComponentActivity() {
 
         val root = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setBackgroundColor(softBackground)
+            setBackgroundColor(Color.rgb(247, 249, 247))
             layoutParams = ViewGroup.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT,
                 ViewGroup.LayoutParams.MATCH_PARENT
             )
         }
 
+        // Native branded header with the actual MALTWEB image asset.
         val header = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
-            setPadding(dp(14))
+            setPadding(dp(12), dp(7), dp(10), dp(7))
             setBackgroundColor(maltGreen)
         }
 
-        val logo = TextView(this).apply {
-            text = "M"
-            textSize = 25f
-            typeface = Typeface.DEFAULT_BOLD
-            setTextColor(pageWhite)
-            gravity = Gravity.CENTER
-            setPadding(dp(5))
+        val logo = ImageView(this).apply {
+            setImageResource(R.drawable.maltweb_logo)
+            scaleType = ImageView.ScaleType.FIT_CENTER
+            contentDescription = "MALTWEB logo"
         }
-        header.addView(logo, LinearLayout.LayoutParams(dp(42), dp(44)))
+        header.addView(logo, LinearLayout.LayoutParams(dp(54), dp(54)))
 
         val titleColumn = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setPadding(dp(8), 0, 0, 0)
+            setPadding(dp(9), 0, 0, 0)
         }
         titleView = TextView(this).apply {
             text = "MALTWEB"
-            textSize = 19f
+            textSize = 20f
             typeface = Typeface.DEFAULT_BOLD
-            setTextColor(pageWhite)
+            setTextColor(white)
         }
         val subtitle = TextView(this).apply {
             text = "Your community, connected."
-            textSize = 11f
-            setTextColor(Color.rgb(225, 243, 235))
+            textSize = 12f
+            setTextColor(Color.rgb(222, 242, 234))
         }
         titleColumn.addView(titleView)
         titleColumn.addView(subtitle)
-        header.addView(
-            titleColumn,
-            LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
-        )
+        header.addView(titleColumn, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
 
-        refreshButton = makeHeaderButton("↻") { if (::webView.isInitialized) webView.reload() }
-        header.addView(refreshButton, LinearLayout.LayoutParams(dp(44), dp(44)))
+        val refreshTop = makeHeaderButton("↻") {
+            if (::webView.isInitialized) webView.reload()
+        }
+        header.addView(refreshTop, LinearLayout.LayoutParams(dp(46), dp(46)))
         root.addView(header)
 
         progressBar = ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal).apply {
             max = 100
             progress = 0
-            progressTintList = android.content.res.ColorStateList.valueOf(Color.rgb(54, 190, 128))
-            indeterminateTintList = android.content.res.ColorStateList.valueOf(maltGreen)
+            progressTintList = android.content.res.ColorStateList.valueOf(Color.rgb(80, 210, 151))
+            visibility = View.GONE
         }
         root.addView(progressBar, LinearLayout.LayoutParams(
             ViewGroup.LayoutParams.MATCH_PARENT, dp(3)
         ))
 
-        pageContainer = FrameLayout(this)
-        root.addView(pageContainer, LinearLayout.LayoutParams(
+        val pageFrame = FrameLayout(this)
+        root.addView(pageFrame, LinearLayout.LayoutParams(
             ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f
         ))
 
-        webView = WebView(this)
-        webView.setBackgroundColor(pageWhite)
-        webView.settings.apply {
-            javaScriptEnabled = true // Required by the existing website's interactive UI.
-            domStorageEnabled = true // Allows normal website storage/session behavior.
-            loadsImagesAutomatically = true
-            javaScriptCanOpenWindowsAutomatically = false
-            setSupportMultipleWindows(false)
-            allowFileAccess = false
-            allowContentAccess = false
-            mixedContentMode = android.webkit.WebSettings.MIXED_CONTENT_NEVER_ALLOW
-            builtInZoomControls = false
-            displayZoomControls = false
+        webView = WebView(this).apply {
+            setBackgroundColor(white)
+            settings.apply {
+                javaScriptEnabled = true
+                domStorageEnabled = true
+                loadsImagesAutomatically = true
+                javaScriptCanOpenWindowsAutomatically = false
+                setSupportMultipleWindows(false)
+                allowFileAccess = false
+                allowContentAccess = false
+                mixedContentMode = android.webkit.WebSettings.MIXED_CONTENT_NEVER_ALLOW
+                builtInZoomControls = false
+                displayZoomControls = false
+            }
         }
+
         webView.webViewClient = object : WebViewClient() {
-            override fun shouldOverrideUrlLoading(
-                view: WebView?,
-                request: WebResourceRequest?
-            ): Boolean {
+            override fun shouldOverrideUrlLoading(view: WebView?, request: WebResourceRequest?): Boolean {
                 val uri = request?.url ?: return false
                 val scheme = uri.scheme?.lowercase()
-                // Keep normal website pages inside the app. Block non-web schemes rather
-                // than launching unknown apps or exposing them to the WebView.
+                // Keep web links in the app; don't allow unknown non-web schemes.
                 return scheme != "https" && scheme != "http"
             }
 
             override fun onPageStarted(view: WebView?, url: String?, favicon: Bitmap?) {
-                progressBar.visibility = View.VISIBLE
-                progressBar.progress = 8
+                pageLoadCount++
+                showLoadingAnimation()
                 titleView.text = "MALTWEB"
             }
 
             override fun onPageFinished(view: WebView?, url: String?) {
                 progressBar.progress = 100
-                progressBar.visibility = View.GONE
-                titleView.text = "MALTWEB"
                 updateNavigationButtons()
+                hideLoadingAnimation()
             }
 
             override fun onReceivedError(
                 view: WebView?,
                 request: WebResourceRequest?,
-                error: android.webkit.WebResourceError?
+                error: WebResourceError?
             ) {
                 if (request?.isForMainFrame == true) {
+                    hideLoadingAnimation()
                     Toast.makeText(
                         this@MainActivity,
-                        "Unable to load MALTWEB. Check your internet and tap refresh.",
+                        "MALTWEB couldn't load this page. Check your internet and tap refresh.",
                         Toast.LENGTH_LONG
                     ).show()
-                    progressBar.visibility = View.GONE
                 }
             }
         }
+
         webView.webChromeClient = object : WebChromeClient() {
             override fun onProgressChanged(view: WebView?, newProgress: Int) {
                 progressBar.progress = newProgress
-                progressBar.visibility = if (newProgress >= 100) View.GONE else View.VISIBLE
+                progressBar.visibility = if (newProgress in 1..99) View.VISIBLE else View.GONE
             }
         }
-        pageContainer.addView(webView, FrameLayout.LayoutParams(
+        pageFrame.addView(webView, FrameLayout.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT,
+            ViewGroup.LayoutParams.MATCH_PARENT
+        ))
+
+        // Animated branded overlay shown while a new website page is loading.
+        loadingOverlay = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            gravity = Gravity.CENTER
+            setBackgroundColor(white)
+            setPadding(dp(28), dp(24), dp(28), dp(24))
+            visibility = View.GONE
+            alpha = 1f
+        }
+        loadingLogo = ImageView(this).apply {
+            setImageResource(R.drawable.maltweb_logo)
+            scaleType = ImageView.ScaleType.FIT_CENTER
+            contentDescription = "MALTWEB loading animation"
+        }
+        loadingOverlay.addView(loadingLogo, LinearLayout.LayoutParams(dp(112), dp(112)))
+        val loadingTitle = TextView(this).apply {
+            text = "MALTWEB"
+            textSize = 23f
+            typeface = Typeface.DEFAULT_BOLD
+            setTextColor(deepGreen)
+            gravity = Gravity.CENTER
+        }
+        loadingOverlay.addView(loadingTitle, LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT
+        ).apply { topMargin = dp(12) })
+
+        val loadingMessage = TextView(this).apply {
+            text = "Connecting your community…"
+            textSize = 14f
+            setTextColor(muted)
+            gravity = Gravity.CENTER
+        }
+        loadingOverlay.addView(loadingMessage, LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT
+        ).apply { topMargin = dp(5) })
+
+        val spinner = ProgressBar(this).apply {
+            indeterminateTintList = android.content.res.ColorStateList.valueOf(maltGreen)
+        }
+        loadingOverlay.addView(spinner, LinearLayout.LayoutParams(dp(42), dp(42)).apply {
+            topMargin = dp(18)
+        })
+
+        pageFrame.addView(loadingOverlay, FrameLayout.LayoutParams(
             ViewGroup.LayoutParams.MATCH_PARENT,
             ViewGroup.LayoutParams.MATCH_PARENT
         ))
@@ -186,24 +235,18 @@ class MainActivity : ComponentActivity() {
         val nav = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER
-            setBackgroundColor(pageWhite)
-            setPadding(dp(6), dp(6), dp(6), dp(6))
+            setBackgroundColor(white)
+            setPadding(dp(5), dp(4), dp(5), dp(4))
         }
-
-        homeButton = makeNavButton("⌂\nHome") {
+        val homeButton = makeNavButton("⌂\nHome") {
             if (webView.url != websiteUrl) webView.loadUrl(websiteUrl)
             else webView.scrollTo(0, 0)
         }
-        backButton = makeNavButton("‹\nBack") {
-            if (webView.canGoBack()) webView.goBack()
-        }
-        forwardButton = makeNavButton("›\nForward") {
-            if (webView.canGoForward()) webView.goForward()
-        }
-        val reloadNav = makeNavButton("↻\nRefresh") { webView.reload() }
-
-        listOf(homeButton, backButton, forwardButton, reloadNav).forEach { button ->
-            nav.addView(button, LinearLayout.LayoutParams(0, dp(54), 1f))
+        backButton = makeNavButton("‹\nBack") { if (webView.canGoBack()) webView.goBack() }
+        forwardButton = makeNavButton("›\nForward") { if (webView.canGoForward()) webView.goForward() }
+        val refreshButton = makeNavButton("↻\nRefresh") { webView.reload() }
+        listOf(homeButton, backButton, forwardButton, refreshButton).forEach { button ->
+            nav.addView(button, LinearLayout.LayoutParams(0, dp(55), 1f))
         }
         root.addView(nav)
 
@@ -211,9 +254,8 @@ class MainActivity : ComponentActivity() {
 
         onBackPressedDispatcher.addCallback(this, object : OnBackPressedCallback(true) {
             override fun handleOnBackPressed() {
-                if (webView.canGoBack()) {
-                    webView.goBack()
-                } else {
+                if (webView.canGoBack()) webView.goBack()
+                else {
                     isEnabled = false
                     onBackPressedDispatcher.onBackPressed()
                 }
@@ -225,14 +267,51 @@ class MainActivity : ComponentActivity() {
         } else {
             webView.loadUrl(websiteUrl)
         }
-        updateNavigationButtons()
+    }
+
+    private fun showLoadingAnimation() {
+        loadingOverlay.clearAnimation()
+        loadingLogo.clearAnimation()
+        loadingOverlay.visibility = View.VISIBLE
+        loadingOverlay.alpha = 0f
+        loadingOverlay.startAnimation(AlphaAnimation(0f, 1f).apply {
+            duration = 180
+            fillAfter = true
+        })
+        loadingLogo.startAnimation(ScaleAnimation(
+            0.88f, 1.06f, 0.88f, 1.06f,
+            Animation.RELATIVE_TO_SELF, 0.5f,
+            Animation.RELATIVE_TO_SELF, 0.5f
+        ).apply {
+            duration = 650
+            repeatMode = Animation.REVERSE
+            repeatCount = Animation.INFINITE
+        })
+    }
+
+    private fun hideLoadingAnimation() {
+        if (!::loadingOverlay.isInitialized || loadingOverlay.visibility != View.VISIBLE) return
+        loadingLogo.clearAnimation()
+        val fade = AlphaAnimation(1f, 0f).apply {
+            duration = 220
+            setAnimationListener(object : Animation.AnimationListener {
+                override fun onAnimationStart(animation: Animation?) = Unit
+                override fun onAnimationRepeat(animation: Animation?) = Unit
+                override fun onAnimationEnd(animation: Animation?) {
+                    loadingOverlay.visibility = View.GONE
+                    loadingOverlay.alpha = 1f
+                }
+            })
+        }
+        loadingOverlay.startAnimation(fade)
+        progressBar.visibility = View.GONE
     }
 
     private fun makeHeaderButton(label: String, action: () -> Unit): Button =
         Button(this).apply {
             text = label
-            textSize = 21f
-            setTextColor(pageWhite)
+            textSize = 22f
+            setTextColor(white)
             setBackgroundColor(maltGreen)
             isAllCaps = false
             setOnClickListener { action() }
@@ -243,7 +322,7 @@ class MainActivity : ComponentActivity() {
             text = label
             textSize = 12f
             setTextColor(darkText)
-            setBackgroundColor(pageWhite)
+            setBackgroundColor(white)
             isAllCaps = false
             minWidth = 0
             setPadding(dp(2))
