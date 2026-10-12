@@ -1,5 +1,3 @@
-import java.util.Base64
-
 plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.android")
@@ -18,32 +16,18 @@ android {
         versionName = "1.1.0"
     }
 
-    signingConfigs {
-        create("release") {
-            val storeFilePath = System.getenv("ANDROID_KEYSTORE_PATH")
-            if (!storeFilePath.isNullOrBlank()) {
-                storeFile = file(storeFilePath)
-                storePassword = System.getenv("ANDROID_KEYSTORE_PASSWORD")
-                keyAlias = System.getenv("ANDROID_KEY_ALIAS")
-                keyPassword = System.getenv("ANDROID_KEY_PASSWORD")
-            }
-        }
+    buildFeatures {
+        compose = true
+        buildConfig = true
     }
 
-    buildTypes {
-        getByName("release") {
-            isMinifyEnabled = false
-            // Release workflow supplies a stable keystore via GitHub Actions secrets.
-            signingConfig = signingConfigs.getByName("release")
-        }
-    }
-
-    buildFeatures { compose = true }
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
     }
-    kotlinOptions { jvmTarget = "17" }
+    kotlinOptions {
+        jvmTarget = "17"
+    }
 }
 
 dependencies {
