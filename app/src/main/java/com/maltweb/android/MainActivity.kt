@@ -25,15 +25,25 @@ import java.net.HttpURLConnection
 import java.net.URL
 import java.util.concurrent.Executors
 
-/** Friendly optional update arrow. Website stays usable if update checking fails. */
+/**
+ * MALTWEB Android WebView app.
+ * Restores the native branded header and bottom navigation, with a friendly
+ * optional update arrow that appears when a newer APK release is available.
+ */
 class MainActivity : ComponentActivity() {
     private val websiteUrl = "https://ssakaemmanuel.github.io/maltweb/"
-    private val latestReleaseApi = "https://api.github.com/repos/SsakaEmmanuel/MaltwebAndroid/releases/latest"
+    private val latestReleaseApi =
+        "https://api.github.com/repos/SsakaEmmanuel/MaltwebAndroid/releases/latest"
+    private val green = Color.rgb(18, 107, 80)
+    private val deepGreen = Color.rgb(5, 67, 53)
     private val io = Executors.newSingleThreadExecutor()
-    private lateinit var updateButton: Button
-    private lateinit var statusText: TextView
+
     private lateinit var browser: WebView
     private lateinit var progress: ProgressBar
+    private lateinit var updateButton: Button
+    private lateinit var backButton: Button
+    private lateinit var forwardButton: Button
+    private lateinit var loadingOverlay: LinearLayout
     private var latestReleaseUrl: String? = null
     private var latestTag: String? = null
     private var latestNotes: String? = null
@@ -45,7 +55,10 @@ class MainActivity : ComponentActivity() {
         onBackPressedDispatcher.addCallback(this, object : OnBackPressedCallback(true) {
             override fun handleOnBackPressed() {
                 if (browser.canGoBack()) browser.goBack()
-                else { isEnabled = false; onBackPressedDispatcher.onBackPressed() }
+                else {
+                    isEnabled = false
+                    onBackPressedDispatcher.onBackPressed()
+                }
             }
         })
         if (savedInstanceState != null) browser.restoreState(savedInstanceState)
@@ -59,47 +72,55 @@ class MainActivity : ComponentActivity() {
             orientation = LinearLayout.VERTICAL
             setBackgroundColor(Color.WHITE)
         }
+
+        // Native wordmark: does not depend on a missing drawable resource.
         val header = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
-            setPadding(dp(14), dp(8), dp(8), dp(8))
-            setBackgroundColor(Color.rgb(18, 107, 80))
+            setPadding(dp(12), dp(6), dp(6), dp(6))
+            setBackgroundColor(green)
         }
         val brand = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             gravity = Gravity.CENTER_VERTICAL
+            setPadding(dp(4), 0, 0, 0)
         }
         brand.addView(TextView(this).apply {
-            text = "MALTWEB"; textSize = 20f; typeface = Typeface.DEFAULT_BOLD
+            text = "MALTWEB"
+            textSize = 21f
+            typeface = Typeface.DEFAULT_BOLD
             setTextColor(Color.WHITE)
+            contentDescription = "MALTWEB logo"
         })
         brand.addView(TextView(this).apply {
-            text = "Your community, connected."; textSize = 11f
+            text = "Your community, connected."
+            textSize = 11f
             setTextColor(Color.rgb(222, 242, 234))
         })
-        header.addView(brand, LinearLayout.LayoutParams(0, dp(48), 1f))
-        updateButton = Button(this).apply {
-            text = "↓"; textSize = 27f; isAllCaps = false
-            contentDescription = "Download MALTWEB update"
-            setTextColor(Color.WHITE); setBackgroundColor(Color.rgb(5, 82, 61))
-            visibility = View.GONE
-            setOnClickListener { showUpdateDetails() }
-        }
-        header.addView(updateButton, LinearLayout.LayoutParams(dp(54), dp(48)))
-        val refreshButton = Button(this).apply {
-            text = "↻"; textSize = 23f; isAllCaps = false
-            contentDescription = "Refresh MALTWEB"
-            setTextColor(Color.WHITE); setBackgroundColor(Color.rgb(18, 107, 80))
-            setOnClickListener { browser.reload() }
-        }
-        header.addView(refreshButton, LinearLayout.LayoutParams(dp(48), dp(48)))
-        statusText = TextView(this).apply {
-            textSize = 12f; setTextColor(Color.rgb(18, 107, 80))
-            setPadding(dp(14), dp(4), dp(14), dp(4)); visibility = View.GONE
-        }
+        header.addView(brand, LinearLayout.LayoutParams(0, dp(52), 1f))
+
+        updateButton = makeHeaderButton("↓", "Download update") { showUpdateDetails() }
+        updateButton.visibility = View.GONE
+        header.addView(updateButton, LinearLayout.LayoutParams(dp(48), dp(48)))
+        val refreshTop = makeHeaderButton("↻", "Refresh page") { browser.reload() }
+        header.addView(refreshTop, LinearLayout.LayoutParams(dp(44), dp(48)))
+        root.addView(header)
+
         progress = ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal).apply {
-            max = 100; visibility = View.GONE
+            max = 100
+            progress = 0
+            visibility = View.GONE
+            progressTintList = android.content.res.ColorStateList.valueOf(Color.rgb(80, 210, 151))
         }
+        root.addView(progress, LinearLayout.LayoutParams(
+            LinearLayout.LayoutParams.MATCH_PARENT, dp(3)
+        ))
+
+        val frame = android.widget.FrameLayout(this)
+        root.addView(frame, LinearLayout.LayoutParams(
+            LinearLayout.LayoutParams.MATCH_PARENT, 0, 1f
+        ))
+
         browser = WebView(this).apply {
             setBackgroundColor(Color.WHITE)
             settings.javaScriptEnabled = true
@@ -111,9 +132,31 @@ class MainActivity : ComponentActivity() {
             settings.allowContentAccess = false
             settings.mixedContentMode = android.webkit.WebSettings.MIXED_CONTENT_NEVER_ALLOW
             webViewClient = object : WebViewClient() {
-                override fun shouldOverrideUrlLoading(view: WebView?, request: WebResourceRequest?): Boolean {
+                override fun shouldOverrideUrlLoading(
+                    view: WebView?, request: WebResourceRequest?
+                ): Boolean {
                     val uri = request?.url ?: return false
                     return uri.scheme != "https" && uri.scheme != "http"
+                }
+                override fun onPageStarted(view: WebView?, url: String?, favicon: android.graphics.Bitmap?) {
+                    showLoading()
+                }
+                override fun onPageFinished(view: WebView?, url: String?) {
+                    updateNavigationButtons()
+                    hideLoading()
+                }
+                override fun onReceivedError(
+                    view: WebView?, request: WebResourceRequest?,
+                    error: android.webkit.WebResourceError?
+                ) {
+                    if (request?.isForMainFrame == true) {
+                        hideLoading()
+                        Toast.makeText(
+                            this@MainActivity,
+                            "MALTWEB couldn't load. Check your connection and tap refresh.",
+                            Toast.LENGTH_LONG
+                        ).show()
+                    }
                 }
             }
             webChromeClient = object : WebChromeClient() {
@@ -124,11 +167,66 @@ class MainActivity : ComponentActivity() {
                 }
             }
         }
-        root.addView(header)
-        root.addView(statusText)
-        root.addView(progress, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, dp(3)))
-        root.addView(browser, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, 0, 1f))
+        frame.addView(browser, android.widget.FrameLayout.LayoutParams(
+            android.widget.FrameLayout.LayoutParams.MATCH_PARENT,
+            android.widget.FrameLayout.LayoutParams.MATCH_PARENT
+        ))
+
+        loadingOverlay = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            gravity = Gravity.CENTER
+            setBackgroundColor(Color.WHITE)
+            visibility = View.GONE
+        }
+        loadingOverlay.addView(TextView(this).apply {
+            text = "MALTWEB"
+            textSize = 25f
+            typeface = Typeface.DEFAULT_BOLD
+            setTextColor(deepGreen)
+        })
+        loadingOverlay.addView(TextView(this).apply {
+            text = "Connecting your community…"
+            textSize = 14f
+            setTextColor(Color.DKGRAY)
+            setPadding(0, dp(8), 0, dp(12))
+        })
+        loadingOverlay.addView(ProgressBar(this))
+        frame.addView(loadingOverlay, android.widget.FrameLayout.LayoutParams(
+            android.widget.FrameLayout.LayoutParams.MATCH_PARENT,
+            android.widget.FrameLayout.LayoutParams.MATCH_PARENT
+        ))
+
+        // Restore the native navigation row: Home / Back / Forward / Refresh.
+        val nav = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER
+            setBackgroundColor(Color.WHITE)
+            setPadding(dp(4), dp(3), dp(4), dp(3))
+            elevation = dp(5).toFloat()
+        }
+        val home = makeNavButton("⌂\nHome") {
+            if (browser.url != websiteUrl) browser.loadUrl(websiteUrl)
+            else browser.scrollTo(0, 0)
+        }
+        backButton = makeNavButton("‹\nBack") { if (browser.canGoBack()) browser.goBack() }
+        forwardButton = makeNavButton("›\nForward") { if (browser.canGoForward()) browser.goForward() }
+        val refresh = makeNavButton("↻\nRefresh") { browser.reload() }
+        listOf(home, backButton, forwardButton, refresh).forEach { button ->
+            nav.addView(button, LinearLayout.LayoutParams(0, dp(54), 1f))
+        }
+        root.addView(nav)
         setContentView(root)
+        updateNavigationButtons()
+    }
+
+    private fun showLoading() {
+        if (!::loadingOverlay.isInitialized) return
+        loadingOverlay.visibility = View.VISIBLE
+    }
+
+    private fun hideLoading() {
+        if (!::loadingOverlay.isInitialized) return
+        loadingOverlay.visibility = View.GONE
     }
 
     private fun checkForAvailableUpdate() {
@@ -146,9 +244,13 @@ class MainActivity : ComponentActivity() {
                 connection.setRequestProperty("User-Agent", "MALTWEB-Android")
                 val response = try {
                     val code = connection.responseCode
-                    if (code !in 200..299) { errorCode = code; throw IllegalStateException("Update check failed") }
+                    if (code !in 200..299) {
+                        errorCode = code
+                        throw IllegalStateException("Update check failed")
+                    }
                     connection.inputStream.bufferedReader().use { it.readText() }
                 } finally { connection.disconnect() }
+
                 val release = JSONObject(response)
                 val tag = release.optString("tag_name", "").trim()
                 val releaseUrl = release.optString("html_url", "").trim()
@@ -158,25 +260,32 @@ class MainActivity : ComponentActivity() {
                 if (assets != null) {
                     for (i in 0 until assets.length()) {
                         val asset = assets.optJSONObject(i) ?: continue
-                        if (asset.optString("name", "").endsWith(".apk", ignoreCase = true)) { apkFound = true; break }
+                        if (asset.optString("name", "").endsWith(".apk", ignoreCase = true)) {
+                            apkFound = true
+                            break
+                        }
                     }
                 }
-                if (tag.isBlank() || releaseUrl.isBlank() || !apkFound) throw IllegalStateException("No APK release")
+                if (tag.isBlank() || releaseUrl.isBlank() || !apkFound) {
+                    throw IllegalStateException("No published APK is available")
+                }
                 val newer = compareVersions(tag.removePrefix("v"), BuildConfig.VERSION_NAME) > 0
                 runOnUiThread {
                     if (isFinishing) return@runOnUiThread
                     if (newer) {
-                        latestTag = tag; latestReleaseUrl = releaseUrl; latestNotes = notes
+                        latestTag = tag
+                        latestReleaseUrl = releaseUrl
+                        latestNotes = notes
                         updateButton.visibility = View.VISIBLE
-                        statusText.text = "A new version is available. Tap ↓ to update."
-                        statusText.visibility = View.VISIBLE
+                        Toast.makeText(this, "MALTWEB update available — tap ↓", Toast.LENGTH_SHORT).show()
                     }
                 }
             } catch (_: Exception) {
                 runOnUiThread {
-                    if (isFinishing) return@runOnUiThread
-                    val message = if (errorCode != null) "Update check failed ($errorCode)" else "Update check failed"
-                    Toast.makeText(this, message, Toast.LENGTH_SHORT).show()
+                    if (!isFinishing) {
+                        val message = if (errorCode != null) "Update check failed ($errorCode)" else "Update check failed"
+                        Toast.makeText(this, message, Toast.LENGTH_SHORT).show()
+                    }
                 }
             }
         }
@@ -188,27 +297,64 @@ class MainActivity : ComponentActivity() {
         val notes = latestNotes.orEmpty()
         val message = buildString {
             append("MALTWEB $tag is ready to install.")
-            if (notes.isNotBlank()) append("\\n\\nWhat's new:\\n").append(notes.take(1500))
-            append("\\n\\nOpen the official release page to download the update?")
+            if (notes.isNotBlank()) append("\n\nWhat's new:\n").append(notes.take(1500))
+            append("\n\nOpen the release page to download the update?")
         }
-        AlertDialog.Builder(this).setTitle("✨ MALTWEB update available").setMessage(message)
+        AlertDialog.Builder(this)
+            .setTitle("✨ MALTWEB update available")
+            .setMessage(message)
             .setPositiveButton("Download update") { _, _ -> openRelease(url) }
-            .setNegativeButton("Maybe later", null).show()
+            .setNegativeButton("Maybe later", null)
+            .show()
     }
 
     private fun openRelease(url: String) {
         try { startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url))) }
-        catch (_: Exception) { Toast.makeText(this, "Couldn't open the download page.", Toast.LENGTH_SHORT).show() }
+        catch (_: Exception) {
+            Toast.makeText(this, "Couldn't open the download page.", Toast.LENGTH_SHORT).show()
+        }
     }
 
     private fun compareVersions(a: String, b: String): Int {
         val left = a.substringBefore('-').split(".").map { it.toIntOrNull() ?: 0 }
         val right = b.substringBefore('-').split(".").map { it.toIntOrNull() ?: 0 }
         for (i in 0 until maxOf(left.size, right.size)) {
-            val x = left.getOrElse(i) { 0 }; val y = right.getOrElse(i) { 0 }
+            val x = left.getOrElse(i) { 0 }
+            val y = right.getOrElse(i) { 0 }
             if (x != y) return x.compareTo(y)
         }
         return 0
+    }
+
+    private fun makeHeaderButton(label: String, description: String, action: () -> Unit) =
+        Button(this).apply {
+            text = label
+            textSize = 22f
+            contentDescription = description
+            isAllCaps = false
+            setTextColor(Color.WHITE)
+            setBackgroundColor(green)
+            minWidth = 0
+            setPadding(dp(2), 0, dp(2), 0)
+            setOnClickListener { action() }
+        }
+
+    private fun makeNavButton(label: String, action: () -> Unit) =
+        Button(this).apply {
+            text = label
+            textSize = 12f
+            isAllCaps = false
+            minWidth = 0
+            setPadding(dp(2), 0, dp(2), 0)
+            setTextColor(Color.rgb(23, 41, 35))
+            setBackgroundColor(Color.WHITE)
+            setOnClickListener { action() }
+        }
+
+    private fun updateNavigationButtons() {
+        if (!::browser.isInitialized) return
+        if (::backButton.isInitialized) backButton.isEnabled = browser.canGoBack()
+        if (::forwardButton.isInitialized) forwardButton.isEnabled = browser.canGoForward()
     }
 
     private fun dp(value: Int): Int = (value * resources.displayMetrics.density).toInt()
@@ -220,8 +366,10 @@ class MainActivity : ComponentActivity() {
 
     override fun onDestroy() {
         if (::browser.isInitialized) {
-            browser.stopLoading(); browser.loadUrl("about:blank")
-            browser.removeAllViews(); browser.destroy()
+            browser.stopLoading()
+            browser.loadUrl("about:blank")
+            browser.removeAllViews()
+            browser.destroy()
         }
         io.shutdownNow()
         super.onDestroy()
