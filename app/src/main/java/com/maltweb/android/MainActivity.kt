@@ -1,6 +1,7 @@
 package com.maltweb.android
 
 import android.annotation.SuppressLint
+import android.app.Activity
 import android.app.AlertDialog
 import android.content.Intent
 import android.graphics.Color
@@ -9,6 +10,7 @@ import android.net.Uri
 import android.os.Bundle
 import android.view.Gravity
 import android.view.View
+import android.webkit.ValueCallback
 import android.webkit.WebChromeClient
 import android.webkit.WebResourceRequest
 import android.webkit.WebView
@@ -48,6 +50,10 @@ class MainActivity : ComponentActivity() {
     private var latestTag: String? = null
     private var latestNotes: String? = null
     private var updateCheckStarted = false
+
+    // Holds the website's pending <input type="file"> callback.
+    private var filePathCallback: ValueCallback<Array<Uri>>? = null
+    private val fileChooserRequestCode = 7421
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -160,6 +166,47 @@ class MainActivity : ComponentActivity() {
                 }
             }
             webChromeClient = object : WebChromeClient() {
+                override fun onShowFileChooser(
+                    webView: WebView?,
+                    filePathCallback: ValueCallback<Array<Uri>>?,
+                    fileChooserParams: FileChooserParams?
+                ): Boolean {
+                    // Cancel any previous request before replacing its callback.
+                    this@MainActivity.filePathCallback?.onReceiveValue(null)
+                    this@MainActivity.filePathCallback = filePathCallback
+
+                    val chooserIntent = try {
+                        fileChooserParams?.createIntent()
+                    } catch (_: Exception) {
+                        null
+                    }
+
+                    if (chooserIntent == null) {
+                        this@MainActivity.filePathCallback?.onReceiveValue(null)
+                        this@MainActivity.filePathCallback = null
+                        Toast.makeText(
+                            this@MainActivity,
+                            "Unable to open the image picker.",
+                            Toast.LENGTH_LONG
+                        ).show()
+                        return false
+                    }
+
+                    return try {
+                        startActivityForResult(chooserIntent, fileChooserRequestCode)
+                        true
+                    } catch (_: Exception) {
+                        this@MainActivity.filePathCallback?.onReceiveValue(null)
+                        this@MainActivity.filePathCallback = null
+                        Toast.makeText(
+                            this@MainActivity,
+                            "No file picker is available on this phone.",
+                            Toast.LENGTH_LONG
+                        ).show()
+                        false
+                    }
+                }
+
                 override fun onProgressChanged(view: WebView?, newProgress: Int) {
                     this@MainActivity.progress.progress = newProgress
                     this@MainActivity.progress.visibility =
@@ -217,6 +264,22 @@ class MainActivity : ComponentActivity() {
         root.addView(nav)
         setContentView(root)
         updateNavigationButtons()
+    }
+
+    @Deprecated("Used to receive the Android WebView file picker result.")
+    override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
+        super.onActivityResult(requestCode, resultCode, data)
+        if (requestCode != fileChooserRequestCode) return
+
+        val callback = filePathCallback ?: return
+        val selectedUris = if (resultCode == Activity.RESULT_OK) {
+            WebChromeClient.FileChooserParams.parseResult(resultCode, data)
+                ?: data?.data?.let { arrayOf(it) }
+        } else {
+            null
+        }
+        callback.onReceiveValue(selectedUris)
+        filePathCallback = null
     }
 
     private fun showLoading() {
@@ -365,6 +428,8 @@ class MainActivity : ComponentActivity() {
     }
 
     override fun onDestroy() {
+        filePathCallback?.onReceiveValue(null)
+        filePathCallback = null
         if (::browser.isInitialized) {
             browser.stopLoading()
             browser.loadUrl("about:blank")
